@@ -1,10 +1,10 @@
-import React, { FormEvent, useEffect, useMemo, useState } from "react";
+import React, { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import axios from "axios";
 import {
   ArrowUpRight, Bot, BriefcaseBusiness, Check, ChevronDown, CircleHelp,
   Command, ExternalLink, Github, GitFork, GitPullRequest, LayoutDashboard, LoaderCircle,
-  MapPin, RefreshCw, Search, Send, Sparkles, Star, Users, X,
+  MapPin, Moon, RefreshCw, Search, Send, Sparkles, Star, Sun, Users, X,
 } from "lucide-react";
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
 import "./style.css";
@@ -56,14 +56,18 @@ type Compatibility = {
 type ChatMessage = { role: "user" | "assistant"; text: string };
 
 const colors = ["#a78bfa", "#63e6be", "#65a9ff", "#ffba69", "#f285a7", "#7cdbd1"];
+const DEFAULT_USERNAME = "Kunjshah06";
 const api = axios.create({ baseURL: "/api" });
 const formatNumber = (value: number) => new Intl.NumberFormat("en", { notation: value > 9999 ? "compact" : "standard" }).format(value);
 const relativeDate = (date: string) => new Intl.DateTimeFormat("en", { month: "short", day: "numeric", year: "numeric" }).format(new Date(date));
 const errorText = (error: unknown) => axios.isAxiosError(error) ? error.response?.data?.detail || error.message : "Something went wrong.";
 
 function App() {
-  const [username, setUsername] = useState("octocat");
-  const [input, setInput] = useState("octocat");
+  const [theme, setTheme] = useState<"dark" | "light">(
+    () => localStorage.getItem("devfolio-theme") === "light" ? "light" : "dark",
+  );
+  const [username, setUsername] = useState(DEFAULT_USERNAME);
+  const [input, setInput] = useState(DEFAULT_USERNAME);
   const [portfolio, setPortfolio] = useState<Portfolio | null>(null);
   const [contributions, setContributions] = useState<Contribution[] | null>(null);
   const [contributionUnavailable, setContributionUnavailable] = useState("");
@@ -78,13 +82,20 @@ function App() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
+  const profileRequestId = useRef(0);
 
   const loadPortfolio = async (target: string, refresh = false) => {
-    if (!target.trim()) return;
+    const requestedUsername = target.trim();
+    if (!requestedUsername) {
+      setError("Enter a GitHub username to search.");
+      return;
+    }
+    const requestId = ++profileRequestId.current;
     setLoading(true);
     setError("");
     try {
-      const { data } = await api.get<Portfolio>(`/users/${encodeURIComponent(target.trim())}`, { params: { refresh } });
+      const { data } = await api.get<Portfolio>(`/users/${encodeURIComponent(requestedUsername)}`, { params: { refresh } });
+      if (requestId !== profileRequestId.current) return;
       setPortfolio(data);
       setUsername(data.profile.login);
       setInput(data.profile.login);
@@ -95,20 +106,29 @@ function App() {
       setContributionUnavailable("");
       try {
         const contributionResponse = await api.get(`/users/${encodeURIComponent(data.profile.login)}/contributions`);
+        if (requestId !== profileRequestId.current) return;
         if (contributionResponse.data.available) setContributions(contributionResponse.data.days);
         else setContributionUnavailable(contributionResponse.data.reason);
       } catch {
-        setContributionUnavailable("Contribution history could not be loaded.");
+        if (requestId === profileRequestId.current) {
+          setContributionUnavailable("Contribution history could not be loaded.");
+        }
       }
     } catch (requestError) {
+      if (requestId !== profileRequestId.current) return;
       setError(errorText(requestError));
       setPortfolio(null);
     } finally {
-      setLoading(false);
+      if (requestId === profileRequestId.current) setLoading(false);
     }
   };
 
-  useEffect(() => { void loadPortfolio("octocat"); }, []);
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem("devfolio-theme", theme);
+  }, [theme]);
+
+  useEffect(() => { void loadPortfolio(DEFAULT_USERNAME); }, []);
 
   const filteredRepos = useMemo(() => {
     if (!portfolio) return [];
@@ -202,6 +222,15 @@ function App() {
           <div className="top-actions">
             <div className="live-status"><span className="live-dot" /> Live data</div>
             <button className="icon-button" title="Refresh profile data" onClick={() => void loadPortfolio(username, true)} disabled={loading}><RefreshCw size={16} className={loading ? "spin" : ""} /></button>
+            <button
+              className="icon-button"
+              type="button"
+              title={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
+              aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
+              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+            >
+              {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
+            </button>
             <div className="top-avatar">{portfolio?.profile.login.slice(0, 1).toUpperCase() ?? "D"}</div>
           </div>
         </header>
@@ -222,6 +251,7 @@ function App() {
           </section>
 
           {error && <div className="error-banner" role="alert"><CircleHelp size={17} /> <span>{error}</span><button onClick={() => setError("")} aria-label="Dismiss error"><X size={15} /></button></div>}
+          {loading && portfolio && <div className="loading-banner" role="status" aria-live="polite"><LoaderCircle size={14} className="spin" /> Loading @{input.trim()} from GitHub…</div>}
 
           {loading && !portfolio ? <LoadingState /> : portfolio ? (
             <>
@@ -261,7 +291,7 @@ function App() {
                   </div>
                   {contributions ? (
                     <div className="heatmap-scroll">
-                      <div className="heatmap-months">{calendarMonths(calendarDays).map((month) => <span key={month.label} style={{ gridColumn: `${month.column} / span 4` }}>{month.label}</span>)}</div>
+                      <div className="heatmap-months">{calendarMonths(calendarDays).map((month) => <span key={`${month.label}-${month.column}`} style={{ gridColumn: `${month.column} / span 4` }}>{month.label}</span>)}</div>
                       <div className="heatmap-layout"><div className="weekday-labels"><span>Mon</span><span>Wed</span><span>Fri</span></div><div className="heatmap-grid">{calendarDays.map((day) => {
                         const count = contributionMap.get(day) ?? 0;
                         return <span key={day} className={`heat-cell level-${intensity(count)}`} title={`${count} contribution${count === 1 ? "" : "s"} on ${day}`} aria-label={`${count} contributions on ${day}`} />;
@@ -278,7 +308,7 @@ function App() {
                   </div>
                   {portfolio.language_stats.length ? (
                     <div className="language-content">
-                      <div className="donut-wrap"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={portfolio.language_stats} dataKey="repositories" nameKey="name" innerRadius={60} outerRadius={79} paddingAngle={3} stroke="none">{portfolio.language_stats.map((item, index) => <Cell key={item.name} fill={colors[index % colors.length]} />)}</Pie><Tooltip contentStyle={{ background: "#151821", border: "1px solid #2a2e3a", borderRadius: 9, color: "#f4f4f5" }} formatter={(value: number, name: string) => [`${value} repos`, name]} /></PieChart></ResponsiveContainer><div className="donut-center"><strong>{portfolio.language_stats.length}</strong><span>languages</span></div></div>
+                      <div className="donut-wrap"><ResponsiveContainer width="100%" height={132} minWidth={1}><PieChart><Pie data={portfolio.language_stats} dataKey="repositories" nameKey="name" innerRadius="55%" outerRadius="78%" paddingAngle={3} stroke="none">{portfolio.language_stats.map((item, index) => <Cell key={item.name} fill={colors[index % colors.length]} />)}</Pie><Tooltip contentStyle={{ background: theme === "dark" ? "#151821" : "#ffffff", border: `1px solid ${theme === "dark" ? "#2a2e3a" : "#d9dce5"}`, borderRadius: 9, color: theme === "dark" ? "#f4f4f5" : "#252839" }} formatter={(value: number, name: string) => [`${value} repos`, name]} /></PieChart></ResponsiveContainer><div className="donut-center"><strong>{portfolio.language_stats.length}</strong><span>languages</span></div></div>
                       <div className="language-list">{portfolio.language_stats.slice(0, 5).map((language, index) => <div className="language-item" key={language.name}><span className="language-dot" style={{ backgroundColor: colors[index % colors.length] }} /><span className="language-name">{language.name}</span><span className="language-percent">{language.percentage}%</span></div>)}</div>
                     </div>
                   ) : <div className="empty-languages">No language data in public repositories.</div>}
